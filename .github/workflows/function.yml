@@ -1,0 +1,570 @@
+project: CipherMail
+description: Email Forensics & PKI Cryptographic CLI Tool
+version: "1.0"
+requires: "cryptography>=38.0"
+
+functions:
+
+  # ─── Section A: Terminal / Display Helpers ────────────────────────
+
+  - name: c
+    section: Terminal Helpers
+    signature: "c(text: str, colour: str) -> str"
+    description: Wraps text in an ANSI colour escape code and resets it.
+    parameters:
+      - name: text
+        type: str
+        description: The string to colour.
+      - name: colour
+        type: str
+        description: An ANSI escape sequence (e.g. C.GREEN).
+    returns: str
+
+  - name: ok
+    section: Terminal Helpers
+    signature: "ok(msg: str) -> None"
+    description: Prints a green ✔ success message to stdout.
+    parameters:
+      - name: msg
+        type: str
+        description: Message text to display.
+
+  - name: warn
+    section: Terminal Helpers
+    signature: "warn(msg: str) -> None"
+    description: Prints a yellow ⚠ warning message to stdout.
+    parameters:
+      - name: msg
+        type: str
+        description: Warning text to display.
+
+  - name: err
+    section: Terminal Helpers
+    signature: "err(msg: str) -> None"
+    description: Prints a red ✘ error message to stdout.
+    parameters:
+      - name: msg
+        type: str
+        description: Error text to display.
+
+  - name: info
+    section: Terminal Helpers
+    signature: "info(msg: str) -> None"
+    description: Prints a cyan ℹ informational message to stdout.
+    parameters:
+      - name: msg
+        type: str
+        description: Informational text to display.
+
+  - name: bold
+    section: Terminal Helpers
+    signature: "bold(msg: str) -> None"
+    description: Prints a bold message with a preceding newline.
+    parameters:
+      - name: msg
+        type: str
+        description: Message text to display in bold.
+
+  - name: sep
+    section: Terminal Helpers
+    signature: "sep(char: str = '─', width: int = 64) -> None"
+    description: Prints a dim separator line of repeated characters.
+    parameters:
+      - name: char
+        type: str
+        default: "─"
+        description: Character to repeat.
+      - name: width
+        type: int
+        default: 64
+        description: Number of characters wide.
+
+  - name: banner
+    section: Terminal Helpers
+    signature: "banner() -> None"
+    description: Prints the CipherMail ASCII art banner in cyan.
+
+  - name: divider_title
+    section: Terminal Helpers
+    signature: "divider_title(title: str) -> None"
+    description: Prints a bold cyan section heading enclosed by double-line separators.
+    parameters:
+      - name: title
+        type: str
+        description: Section heading text.
+
+  - name: pem_snippet
+    section: Terminal Helpers
+    signature: "pem_snippet(pem_bytes: bytes, lines: int = 4) -> str"
+    description: >
+      Returns a shortened view of a PEM block showing the first and last N lines,
+      with a summary of omitted lines in between.
+    parameters:
+      - name: pem_bytes
+        type: bytes
+        description: Raw PEM data (bytes or str).
+      - name: lines
+        type: int
+        default: 4
+        description: Number of lines to show at the top and bottom.
+    returns: str
+
+  - name: fingerprint
+    section: Terminal Helpers
+    signature: "fingerprint(public_key) -> str"
+    description: Computes a colon-delimited SHA-256 fingerprint of a public key (first 16 bytes).
+    parameters:
+      - name: public_key
+        type: RSAPublicKey
+        description: The RSA public key to fingerprint.
+    returns: str
+
+  - name: b64e
+    section: Terminal Helpers
+    signature: "b64e(data: bytes) -> str"
+    description: Base64-encodes bytes and returns a UTF-8 string.
+    parameters:
+      - name: data
+        type: bytes
+    returns: str
+
+  - name: b64d
+    section: Terminal Helpers
+    signature: "b64d(s: str) -> bytes"
+    description: Base64-decodes a string back to bytes.
+    parameters:
+      - name: s
+        type: str
+    returns: bytes
+
+  - name: now_iso
+    section: Terminal Helpers
+    signature: "now_iso() -> str"
+    description: Returns the current UTC timestamp as an ISO 8601 string ending with 'Z'.
+    returns: str
+
+  # ─── Section B: Application State ────────────────────────────────
+
+  - name: AppState.__init__
+    section: Application State
+    signature: "AppState.__init__(self) -> None"
+    description: >
+      Initialises the application state container with empty keys, certificate,
+      key store, revocation list, audit log, statistics, and last-used packages.
+
+  - name: AppState.log
+    section: Application State
+    signature: "AppState.log(self, action: str, detail: str = '', level: str = 'info') -> None"
+    description: >
+      Appends a new hash-chained entry to the audit log. Each entry includes
+      a SHA-256 hash of itself combined with the previous entry's hash.
+    parameters:
+      - name: action
+        type: str
+        description: Short action label (e.g. "Key pair generated").
+      - name: detail
+        type: str
+        default: ""
+        description: Additional context for the log entry.
+      - name: level
+        type: str
+        default: info
+        description: "Severity level: info | success | warn | error"
+
+  - name: AppState.has_key
+    section: Application State
+    signature: "AppState.has_key(self) -> bool"
+    description: Returns True if both a private key and public key are loaded in state.
+    returns: bool
+
+  # ─── Section C: Key Management ───────────────────────────────────
+
+  - name: cmd_generate_key
+    section: Key Management
+    signature: "cmd_generate_key() -> None"
+    description: >
+      Interactive command. Prompts the user to choose RSA-2048 or RSA-4096,
+      enter an owner label and PKCS#12 password, then generates the key pair,
+      stores it in STATE, and optionally saves PEM files to disk.
+    side_effects:
+      - Sets STATE.private_key, STATE.public_key, STATE.owner
+      - Appends to STATE.key_store
+      - Increments STATE.stats['keys']
+      - Writes audit log entry
+
+  - name: cmd_show_key_store
+    section: Key Management
+    signature: "cmd_show_key_store() -> None"
+    description: Prints all key pairs in the session key store with owner, algorithm, creation time, and fingerprint.
+
+  - name: cmd_load_key
+    section: Key Management
+    signature: "cmd_load_key() -> None"
+    description: >
+      Interactive command. Loads a public and password-protected private PEM key pair
+      from disk into the application state.
+    side_effects:
+      - Sets STATE.public_key, STATE.private_key, STATE.owner
+      - Appends to STATE.key_store
+      - Writes audit log entry
+
+  # ─── Section D: Certificates ─────────────────────────────────────
+
+  - name: cmd_issue_cert
+    section: Certificates
+    signature: "cmd_issue_cert() -> None"
+    description: >
+      Interactive command. Issues a self-signed X.509 certificate for the currently
+      loaded key pair, with user-supplied CN, organisation, country, and validity period.
+      Configures KeyUsage (digitalSignature, keyEncipherment) and EmailProtection EKU.
+    side_effects:
+      - Sets STATE.certificate
+      - Writes audit log entry
+      - Optionally saves certificate PEM to disk
+
+  - name: cmd_validate_cert
+    section: Certificates
+    signature: "cmd_validate_cert() -> None"
+    description: >
+      Interactive command. Loads a certificate from file, pasted PEM, or the active
+      session cert, then checks its validity window and in-memory revocation list.
+    side_effects:
+      - Writes audit log entry
+
+  - name: cmd_revoke_cert
+    section: Certificates
+    signature: "cmd_revoke_cert() -> None"
+    description: >
+      Interactive command. Adds the active certificate's serial number to the
+      in-memory Certificate Revocation List (CRL).
+    side_effects:
+      - Appends to STATE.revoked_serials
+      - Writes audit log entry
+
+  # ─── Section E: Signing & Verification ───────────────────────────
+
+  - name: _rsa_sign
+    section: Signing & Verification
+    signature: "_rsa_sign(message: bytes) -> bytes"
+    description: >
+      Signs a message with the active private key using RSA-PSS with MGF1-SHA256
+      and maximum salt length.
+    parameters:
+      - name: message
+        type: bytes
+        description: The raw message bytes to sign.
+    returns: bytes (DER-encoded signature)
+
+  - name: _rsa_verify
+    section: Signing & Verification
+    signature: "_rsa_verify(public_key, message: bytes, signature: bytes) -> bool"
+    description: >
+      Verifies an RSA-PSS-SHA256 signature against a message and public key.
+      Returns True if valid, False on InvalidSignature.
+    parameters:
+      - name: public_key
+        type: RSAPublicKey
+        description: The public key to verify with.
+      - name: message
+        type: bytes
+        description: Original message bytes.
+      - name: signature
+        type: bytes
+        description: DER-encoded RSA-PSS signature.
+    returns: bool
+
+  - name: cmd_sign
+    section: Signing & Verification
+    signature: "cmd_sign() -> None"
+    description: >
+      Interactive command. Signs a typed message or file with the active private key
+      and produces a signed JSON package containing the message, hash, signature,
+      signer, algorithm, timestamp, and key fingerprint.
+    side_effects:
+      - Sets STATE.last_signed_pkg
+      - Increments STATE.stats['sigs']
+      - Writes audit log entry
+      - Optionally saves JSON package to disk
+
+  - name: cmd_verify
+    section: Signing & Verification
+    signature: "cmd_verify() -> None"
+    description: >
+      Interactive command. Loads a signed JSON package and verifies the RSA-PSS
+      signature. Supports loading the package from file, pasted JSON, or memory.
+      Warns if the package is older than 24 hours (replay risk).
+    side_effects:
+      - Increments STATE.stats['verifs']
+      - Writes audit log entry
+
+  - name: cmd_multi_party_sign
+    section: Signing & Verification
+    signature: "cmd_multi_party_sign() -> None"
+    description: >
+      Demo command. Generates fresh key pairs for three authorized signers and one
+      attacker, signs a document with each, and verifies all signatures against the
+      original document to demonstrate that the attacker's forged content is rejected.
+    side_effects:
+      - Writes audit log entry
+
+  # ─── Section F: Hybrid Encryption / Decryption ───────────────────
+
+  - name: cmd_encrypt
+    section: Hybrid Encryption
+    signature: "cmd_encrypt() -> None"
+    description: >
+      Interactive command. Encrypts a message or file using hybrid encryption:
+      a random 256-bit AES session key encrypts the plaintext with AES-256-GCM,
+      then the session key is encrypted with RSA-OAEP-SHA256. Produces a JSON package.
+    side_effects:
+      - Sets STATE.last_enc_pkg
+      - Increments STATE.stats['encrypts']
+      - Writes audit log entry
+      - Optionally saves JSON package to disk
+
+  - name: cmd_decrypt
+    section: Hybrid Encryption
+    signature: "cmd_decrypt() -> None"
+    description: >
+      Interactive command. Loads an encrypted JSON package, decrypts the RSA-OAEP
+      wrapped AES key, then decrypts the ciphertext with AES-256-GCM.
+      Warns if the package timestamp is more than 24 hours old.
+    side_effects:
+      - Writes audit log entry
+
+  # ─── Section G: Email Forensics ───────────────────────────────────
+
+  - name: _parse_headers
+    section: Email Forensics
+    signature: "_parse_headers(raw: str) -> dict"
+    description: >
+      Parses raw email text into a lowercase header dictionary,
+      handling folded (multi-line) headers correctly.
+    parameters:
+      - name: raw
+        type: str
+        description: Raw email text containing headers and optional body.
+    returns: "dict[str, str]"
+
+  - name: cmd_email_forensics
+    section: Email Forensics
+    signature: "cmd_email_forensics() -> None"
+    description: >
+      Interactive command. Accepts raw email headers via paste, file, or built-in
+      examples. Analyses for domain mismatch (From vs Return-Path), missing DKIM,
+      DKIM domain mismatch, and missing Message-ID. Displays routing chain and
+      threat verdict. Optionally signs the email body with the active key.
+    side_effects:
+      - Writes audit log entry
+
+  - name: _email_forensics_raw
+    section: Email Forensics
+    signature: "_email_forensics_raw(raw: str) -> None"
+    description: >
+      Non-interactive version of email forensics used by CLI mode.
+      Checks for domain mismatch and missing DKIM only and prints a short verdict.
+    parameters:
+      - name: raw
+        type: str
+        description: Raw email text to analyse.
+
+  # ─── Section H: Attack Simulations ────────────────────────────────
+
+  - name: cmd_attack_simulations
+    section: Attack Simulations
+    signature: "cmd_attack_simulations() -> None"
+    description: >
+      Interactive command. Menu to run individual or all attack simulations:
+      MITM, replay, weak key, and certificate spoofing.
+
+  - name: _sim_mitm
+    section: Attack Simulations
+    signature: "_sim_mitm() -> None"
+    description: >
+      Simulates a MITM message tampering attack. Signs an original message,
+      then attempts to verify the signature against a tampered version,
+      demonstrating that RSA-PSS correctly detects the tampering.
+    side_effects:
+      - May auto-generate demo keys if none loaded
+      - Writes audit log entry
+
+  - name: _sim_replay
+    section: Attack Simulations
+    signature: "_sim_replay() -> None"
+    description: >
+      Simulates a replay attack by constructing a package with a 2-hour-old
+      timestamp and showing it exceeds the 5-minute replay window and is rejected.
+    side_effects:
+      - Writes audit log entry
+
+  - name: _sim_weak_key
+    section: Attack Simulations
+    signature: "_sim_weak_key() -> None"
+    description: >
+      Displays a table of RSA key sizes (512 – 4096 bits) with their security
+      classification and shows that keys below 2048 bits are blocked by policy.
+    side_effects:
+      - Writes audit log entry
+
+  - name: _sim_cert_spoof
+    section: Attack Simulations
+    signature: "_sim_cert_spoof() -> None"
+    description: >
+      Generates a forged self-signed certificate using a fresh attacker key pair
+      with a trusted domain CN, then checks whether the forged key's fingerprint
+      is in the session trust store — demonstrating that it is correctly rejected.
+    side_effects:
+      - Writes audit log entry
+
+  # ─── Section I: Audit Log ─────────────────────────────────────────
+
+  - name: cmd_audit_log
+    section: Audit Log
+    signature: "cmd_audit_log() -> None"
+    description: >
+      Displays the full hash-chained audit log with timestamps, actions, details,
+      and per-entry hashes. Prints a final SHA-256 integrity hash of the entire log.
+
+  # ─── Section J: Use Case Demos ────────────────────────────────────
+
+  - name: _ensure_keys
+    section: Use Case Demos
+    signature: "_ensure_keys() -> None"
+    description: >
+      Silently auto-generates an RSA-2048 demo key pair and registers it in STATE
+      if no key pair is currently loaded. Used as a guard in demo functions.
+    side_effects:
+      - May set STATE.private_key, STATE.public_key, STATE.owner
+      - May append to STATE.key_store
+      - May increment STATE.stats['keys']
+
+  - name: cmd_use_cases
+    section: Use Case Demos
+    signature: "cmd_use_cases() -> None"
+    description: >
+      Interactive command. Menu to launch one of three real-world use-case demos:
+      legal contract signing, secure email authentication, or medical record integrity.
+
+  - name: _uc_legal
+    section: Use Case Demos
+    signature: "_uc_legal() -> None"
+    description: >
+      Demo: Signs a synthetic legal partnership agreement with the active key,
+      verifies the signature, and explains how digital signatures prove integrity.
+    side_effects:
+      - Writes audit log entry
+
+  - name: _uc_email_auth
+    section: Use Case Demos
+    signature: "_uc_email_auth() -> None"
+    description: >
+      Demo: Signs a sample CFO email, verifies the original signature passes,
+      then constructs a spoofed version and shows verification fails,
+      proving the sender cannot be impersonated.
+    side_effects:
+      - Writes audit log entry
+
+  - name: _uc_medical
+    section: Use Case Demos
+    signature: "_uc_medical() -> None"
+    description: >
+      Demo: Encrypts a synthetic medical prescription with AES-256-GCM + RSA-OAEP,
+      signs it with the doctor's key, decrypts it to verify integrity,
+      and logs the access in the audit trail.
+    side_effects:
+      - Writes audit log entry
+
+  # ─── Section K: Statistics & Menu ────────────────────────────────
+
+  - name: cmd_stats
+    section: Statistics
+    signature: "cmd_stats() -> None"
+    description: >
+      Displays session statistics: keys generated, signatures made, verifications
+      performed, encryptions, audit log entries, and revoked certificate count.
+      Also shows the active key fingerprint and certificate expiry if available.
+
+  - name: print_menu
+    section: Menu
+    signature: "print_menu() -> list"
+    description: >
+      Renders the interactive main menu to stdout and returns the MENU list
+      of tuples for use by the input dispatch loop.
+    returns: "list[tuple]"
+
+  - name: run_interactive
+    section: Menu
+    signature: "run_interactive() -> None"
+    description: >
+      Displays the banner and runs the main interactive menu loop,
+      dispatching numeric user input to the appropriate command handler
+      until the user selects 0 (Exit) or presses Ctrl-C.
+
+  # ─── Section L: CLI Argument Mode ────────────────────────────────
+
+  - name: cli_mode
+    section: CLI
+    signature: "cli_mode() -> None"
+    description: >
+      Main entry point. Parses argparse subcommands (keygen, sign, verify,
+      encrypt, decrypt, forensics, attacks, usecases, log, stats).
+      Falls back to run_interactive() when no subcommand is supplied.
+    subcommands:
+      - name: keygen
+        description: Generate an RSA key pair and save PEM files.
+        arguments:
+          - flag: "--bits"
+            type: int
+            choices: [2048, 4096]
+            default: 2048
+          - flag: "--owner"
+            type: str
+            default: "user@example.com"
+          - flag: "--password"
+            type: str
+            default: "changeme"
+      - name: sign
+        description: Sign a message or file.
+        arguments:
+          - flag: "-m / --message"
+            type: str
+          - flag: "-f / --file"
+            type: str
+      - name: verify
+        description: Verify a signed JSON package.
+        arguments:
+          - flag: "-f / --file"
+            type: str
+            required: true
+      - name: encrypt
+        description: Encrypt a message or file.
+        arguments:
+          - flag: "-m / --message"
+            type: str
+          - flag: "-f / --file"
+            type: str
+      - name: decrypt
+        description: Decrypt an encrypted JSON package.
+        arguments:
+          - flag: "-f / --file"
+            type: str
+            required: true
+      - name: forensics
+        description: Analyse email headers for spoofing.
+        arguments:
+          - flag: "-f / --file"
+            type: str
+          - flag: "--spoofed"
+            type: bool
+            action: store_true
+          - flag: "--legit"
+            type: bool
+            action: store_true
+      - name: attacks
+        description: Run all four attack simulations.
+      - name: usecases
+        description: Run all three real-world use-case demos.
+      - name: log
+        description: Display the hash-chained audit log.
+      - name: stats
+        description: Display session statistics.
